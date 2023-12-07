@@ -23,11 +23,6 @@
 
 #define MAX_PACKET_LEN 1472
 #define MAX_BUFFER_LEN 2048
-#define MAX_FILENAME_LEN 100
-#define START 0
-#define END 1
-#define DATA 2
-#define ACK 3
 
 FILE* openFileForReadWrite(const char* filename) {
     FILE* fileptr = fopen(filename, "rb+");
@@ -178,7 +173,7 @@ int main(int argc, char *argv[]) {
         file_num++;
         FILE *fileptr = nullptr;
         char chunk[MAX_PACKET_LEN];
-        memset(chunk, 0, MAX_PACKET_LEN);
+        bzero(chunk, MAX_PACKET_LEN);
         char output_file[strlen(file_dir) + 10];
         sprintf(output_file, "%s/FILE-%d", file_dir, file_num);
 
@@ -312,6 +307,17 @@ int main(int argc, char *argv[]) {
 
 
             writeLog(getHeaderFromPacket(ACK_buffer),log_fileptr);
+        }
+
+        fclose(fileptr);
+    }
+
+    close(sockfd);
+    fclose(log_fileptr);
+
+    return 0;
+}
+rFromPacket(ACK_buffer),log_fileptr);
         }
 
         fclose(fileptr);

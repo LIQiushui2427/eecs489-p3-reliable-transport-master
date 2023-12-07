@@ -70,6 +70,22 @@ void left_shift_array(int *array, int num_elements, int shift_by) {
     }
 }
 
+void left_shift_array_timeval(struct timeval *array, int num_elements, int shift_by) {
+    assert(num_elements > 0);
+    assert(shift_by >= 0);
+    assert(shift_by <= num_elements);
+
+    if (shift_by == 0) {
+        return;
+    }
+
+    memmove(&array[0], &array[shift_by], (num_elements - shift_by) * sizeof(struct timeval));
+
+    for (int i = num_elements - shift_by; i < num_elements; i++) {
+        array[i] = (struct timeval) {0};
+    }
+}
+
 int min(int a, int b) {
     return a < b ? a : b;
 }
@@ -80,11 +96,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char *input_file = argv[4];
-    int window_size = atoi(argv[3]);
-    char *log = argv[5];
-    char *receiver_IP = argv[1];
-    int receiver_port = atoi(argv[2]);
+    char *input_file = argv[1];
+    int window_size = atoi(argv[2]);
+    char *log = argv[3];
+    char *receiver_IP = argv[4];
+    int receiver_port = atoi(argv[5]);
 
     // Init log file pointer
     FILE *log_fileptr = fopen(log, "a+");
@@ -113,7 +129,7 @@ int main(int argc, char *argv[]) {
 
     struct timeval tv;
     tv.tv_sec = 0;
-    tv.tv_usec = 500000;
+    tv.tv_usec = 1000;
     if (setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
         perror("Error");
     }
@@ -145,7 +161,6 @@ int main(int argc, char *argv[]) {
     packet_len = assemble_packet(buffer, 0, rand_num, 0, chunk);
 
     while (true) {
-        printf("Sending START\n");
         if ((numbytes = sendto(sockfd, buffer, packet_len, 0,
                                (struct sockaddr *) &recv_addr, sizeof(struct sockaddr))) == -1) {
             perror("sendto");
@@ -176,65 +191,114 @@ int main(int argc, char *argv[]) {
     // Sending chunks
     int num_chunks = (int) ceil((double) file_len / (double) (MAX_PACKET_LEN - sizeof(struct PacketHeader)));
     int status[window_size]; // -1: not sent, 0: sent not acked, 1: acked
+    struct timeval send_time[window_size];
     for (int i = 0; i < window_size; i++) {
         status[i] = -1;
+        send_time[i] = (struct timeval) {0};
     }
 
     int window_start = 0;
-    bool resend_all = true;
-    struct timeval start_time;
     while (window_start != num_chunks) {
         for (int i = 0; i < min(window_size, num_chunks - window_start); i++) {
-            if (status[i] == -1 || (resend_all && status[i] == 0)) {
-                chunk_len = fread_nth_chunk(chunk, i + window_start, file_len, fileptr);
-                packet_len = assemble_packet(buffer, 2, i + window_start, chunk_len, chunk);
-                if ((numbytes = sendto(sockfd, buffer, packet_len, 0,
-                                       (struct sockaddr *) &recv_addr, sizeof(struct sockaddr))) == -1) {
-                    perror("sendto");
-                    exit(1);
-                }
-                status[i] = 0;
+            switch (status[i]) {
+                case -1: {
+                    chunk_len = fread_nth_chunk(chunk, i + window_start, file_len, fileptr);
+                    packet_len = assemble_packet(buffer, 2, i + window_start, chunk_len, chunk);
 
-                struct PacketHeader packet_header = parse_packet_header(buffer);
-                fprintf(log_fileptr, "%u %u %u %u\n", packet_header.type, packet_header.seqNum, packet_header.length,
-                        packet_header.checksum);
-                fflush(log_fileptr);
+
+//                    int r = rand() % 20;
+//                    if (r > 5) {
+
+
+                        if ((numbytes = sendto(sockfd, buffer, packet_len, 0,
+                                               (struct sockaddr *) &recv_addr, sizeof(struct sockaddr))) == -1) {
+                            perror("sendto");
+                            exit(1);
+                        }
+
+
+//                    }
+
+
+                    struct PacketHeader packet_header = parse_packet_header(buffer);
+                    fprintf(log_fileptr, "%u %u %u %u\n", packet_header.type, packet_header.seqNum,
+                            packet_header.length,
+                            packet_header.checksum);
+                    fflush(log_fileptr);
+
+                    status[i] = 0;
+                    gettimeofday(&send_time[i], NULL);
+
+                    break;
+                }
+                case 0: {
+                    struct timeval cur_time;
+                    gettimeofday(&cur_time, NULL);
+
+                    double duration = (cur_time.tv_sec - send_time[i].tv_sec) * 1000.0 +
+                                      (cur_time.tv_usec - send_time[i].tv_usec) / 1000.0;
+                    if (duration > 500) {
+                        chunk_len = fread_nth_chunk(chunk, i + window_start, file_len, fileptr);
+                        packet_len = assemble_packet(buffer, 2, i + window_start, chunk_len, chunk);
+
+
+//                        int r = rand() % 20;
+//                        if (r > 5) {
+
+
+                            if ((numbytes = sendto(sockfd, buffer, packet_len, 0,
+                                                   (struct sockaddr *) &recv_addr, sizeof(struct sockaddr))) == -1) {
+                                perror("sendto");
+                                exit(1);
+                            }
+
+//                        }
+
+
+                        struct PacketHeader packet_header = parse_packet_header(buffer);
+                        fprintf(log_fileptr, "%u %u %u %u\n", packet_header.type, packet_header.seqNum,
+                                packet_header.length,
+                                packet_header.checksum);
+                        fflush(log_fileptr);
+
+                        status[i] = 0;
+                        gettimeofday(&send_time[i], NULL);
+                    }
+                    break;
+                }
+                default: {
+                    break;
+                }
             }
         }
 
-        if (resend_all) {
-            gettimeofday(&start_time, NULL);
+        for (int i = 0; i < min(window_size, num_chunks - window_start); i++) {
+            if ((numbytes = recvfrom(sockfd, ACK_buffer, MAX_BUFFER_LEN - 1, 0,
+                                     (struct sockaddr *) &ACK_addr, (socklen_t *) &addr_len)) != -1) {
+                struct PacketHeader ack_packet_header = parse_packet_header(ACK_buffer);
+                fprintf(log_fileptr, "%u %u %u %u\n", ack_packet_header.type, ack_packet_header.seqNum,
+                        ack_packet_header.length,
+                        ack_packet_header.checksum);
+                fflush(log_fileptr);
+
+                if (ack_packet_header.type == 3 && ack_packet_header.seqNum >= window_start &&
+                    ack_packet_header.seqNum < window_start + window_size) {
+                    status[ack_packet_header.seqNum - window_start] = 1;
+                }
+            }
         }
 
-        if ((numbytes = recvfrom(sockfd, ACK_buffer, MAX_BUFFER_LEN - 1, 0,
-                                 (struct sockaddr *) &ACK_addr, (socklen_t *) &addr_len)) == -1) {
-            resend_all = true;
-            continue;
+        int shift_by = 0;
+        for (int i = 0; i < min(window_size, num_chunks - window_start); i++) {
+            if (status[i] == 1) {
+                shift_by++;
+            } else {
+                break;
+            }
         }
-
-        resend_all = false;
-
-        struct PacketHeader ack_packet_header = parse_packet_header(ACK_buffer);
-        fprintf(log_fileptr, "%u %u %u %u\n", ack_packet_header.type, ack_packet_header.seqNum,
-                ack_packet_header.length,
-                ack_packet_header.checksum);
-        fflush(log_fileptr);
-
-        if (ack_packet_header.type == 3 && ack_packet_header.seqNum > window_start) {
-            left_shift_array(status, window_size, ack_packet_header.seqNum - window_start);
-            window_start = ack_packet_header.seqNum;
-            // reset the timer
-            gettimeofday(&start_time, NULL);
-            continue;
-        }
-        
-        struct timeval cur_time;
-        gettimeofday(&cur_time, NULL);
-        double duration = (cur_time.tv_sec - start_time.tv_sec) * 1000.0 +
-                            (cur_time.tv_usec - start_time.tv_usec) / 1000.0;
-        if (duration > 500) {
-            resend_all = true;
-        }
+        window_start += shift_by;
+        left_shift_array(status, window_size, shift_by);
+        left_shift_array_timeval(send_time, window_size, shift_by);
     }
 
 

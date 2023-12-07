@@ -1,3 +1,4 @@
+#include "crc32.h"
 #include <assert.h>
 #include <string.h>
 #include <assert.h>
@@ -7,11 +8,11 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#include "crc32.h"
+
 #include <stdlib.h>
 #include <stdbool.h>
 #include "PacketHeader.h"
-/* Referred to eecs489 pa1 */
+/* Referred to eecs489 pa1 for some functions and also used some of the code from the starter code */
 #define MAX_PACKET_LEN 1024
 #define MAX_BUFFER_LEN 1032
 
@@ -33,14 +34,16 @@ size_t assemble_packet(char *buffer, unsigned int type, unsigned int seqNum, uns
     return packet_header_len + length;
 }
 
-struct PacketHeader parse_packet_header(char *buffer) {
+// Function to parse a packet header from a buffer
+struct PacketHeader get_header_from_buffer(char *buffer) {
     struct PacketHeader packet_header;
     memcpy(&packet_header, buffer, sizeof(struct PacketHeader));
     return packet_header;
 }
 
+// Function to parse a chunk from a buffer
 size_t parse_chunk(char *buffer, char *chunk) {
-    struct PacketHeader packet_header = parse_packet_header(buffer);
+    struct PacketHeader packet_header = get_header_from_buffer(buffer);
     size_t packet_len = packet_header.length;
     memcpy(chunk, buffer + sizeof(struct PacketHeader), packet_len);
     return packet_len;
@@ -61,38 +64,45 @@ size_t fwrite_nth_chunk(char *chunk, int n, size_t chunk_len, FILE *fileptr) {
     return chunk_len;
 }
 
+// Function to write to log
+void writeLog(struct PacketHeader h,FILE *f){
+    fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
+}
+
 // Function to left shift an array
-void left_shift_array(int *array, int num_elements, int shift_by) {
+void move_window(int *array, int num_elements, int shift_by) {
     assert(num_elements > 0);
     assert(shift_by > 0);
     assert(shift_by <= num_elements);
 
+    // Calculate the number of elements to be shifted
+    int num_shifted_elements = num_elements - shift_by;
+
     // Use memmove to shift elements to the left
-    memmove(&array[0], &array[shift_by], (num_elements - shift_by) * sizeof(int));
+    memmove(array, &array[shift_by], num_shifted_elements * sizeof(int));
 
     // Fill the remaining elements with 0
-    for (int i = num_elements - shift_by; i < num_elements; i++) {
-        array[i] = 0;
-    }
+    memset(&array[num_shifted_elements], 0, shift_by * sizeof(int));
 }
 
 int main(int argc, char *argv[]) {
 if (argc < 5) {
-        fprintf(stderr, "Error: Usage is %s <port_num> <log> <window_size> <file_dir>\n", argv[0]);
+        fprintf(stderr, "Error: Usage is %s <port_num> <window-size> <output-dir> <log>", argv[0]);
         return 1;
     }
 
     int port_num = atoi(argv[1]);
-    char *log = argv[2];
-    int window_size = atoi(argv[3]);
-    char *file_dir = argv[4];
+    char *log = argv[4];
+    int window_size = atoi(argv[2]);
+    char *file_dir = argv[3];
 
-    // Init log file pointer
+    // Init outputdir
     FILE *log_fileptr = fopen(log, "a+");
     if (log_fileptr == NULL) {
         perror("fopen");
         exit(1);
     }
+    printf("Created log file %s\n", log);
     // Init UDP receiver
     int sockfd;
     struct sockaddr_in recv_addr;
@@ -121,16 +131,15 @@ if (argc < 5) {
     int file_num = 0;
     int window_start = 0;
     int status[window_size]; // 0: not received, 1: received and acked
-
+    printf("Sever listening on port %d\n", port_num);
     while (true) {
         // Init filename
-        file_num++;
         FILE *fileptr = NULL;
         char chunk[MAX_PACKET_LEN];
         bzero(chunk, MAX_PACKET_LEN);
         char output_file[strlen(file_dir) + 10];
-        sprintf(output_file, "%s/FILE-%d", file_dir, file_num);
-
+        sprintf(output_file, "%s/FILE-%d.out", file_dir, file_num++);
+        printf("Waiting for file %s\n", output_file);
         int rand_num = -1; // END seqNum should be the same as START;
 
         // Reset receive window
@@ -146,39 +155,52 @@ if (argc < 5) {
                 perror("recvfrom");
                 exit(1);
             }
-
+            
             char *send_ip = inet_ntoa(send_addr.sin_addr);
             int send_port = ntohs(send_addr.sin_port);
+            printf("Received packet from %s:%d\n", send_ip, send_port);
+            printf("Packet is %d bytes long\n", numbytes);
+            printf("Packet contains \"%s\"\n", buffer);
 
-            struct PacketHeader packet_header = parse_packet_header(buffer);
-            fprintf(log_fileptr, "%u %u %u %u\n", packet_header.type, packet_header.seqNum, packet_header.length,
-                    packet_header.checksum);
-            fflush(log_fileptr);
+            // Write to log
+            struct PacketHeader packet_header = get_header_from_buffer(buffer);
+            writeLog(packet_header,log_fileptr);
 
             bzero(chunk, MAX_PACKET_LEN);
             size_t chunk_len = parse_chunk(buffer, chunk);
 
+            // Check checksum
             if (crc32(chunk, chunk_len) != packet_header.checksum) {
-                printf("Checksum incorrect\n");
+                printf("Checksum incorrect, crc32: %u, checksum: %u\n", crc32(chunk, chunk_len),
+                       packet_header.checksum);
                 continue;
             }
 
             int seqNum = -1;
             switch (packet_header.type) {
                 case 0:
-                    if (rand_num != -1 && rand_num != packet_header.seqNum) {
-                        printf("Duplicate START\n");
-                        continue;
+                // START
+                    if (rand_num != -1) {
+                        if (rand_num != packet_header.seqNum) {
+                            printf("Duplicate START\n");
+                            continue;
+                        }
                     } else {
                         rand_num = packet_header.seqNum;
                         seqNum = packet_header.seqNum;
+                        
+                        // Flush file if it exists
                         if (fileptr == NULL) {
+                            printf("Opening file %s\n", output_file);
                             fileptr = fopen(output_file, "wb+");
-                            fclose(fileptr);
-                            fileptr = fopen(output_file, "rb+");
+                            if (fileptr == NULL) {
+                                perror("fopen");
+                                exit(1);
+                            }
                         }
                     }
                     break;
+
                 case 1:
                     if (rand_num != packet_header.seqNum && rand_num != -1) {
                         printf("END seqNum not same as START\n");
@@ -221,7 +243,7 @@ if (argc < 5) {
                             }
                             window_start += shift_by;
                             seqNum = window_start;
-                            left_shift_array(status, window_size, shift_by);
+                            move_window(status, window_size, shift_by);
                         }
                     }
                     break;
@@ -259,11 +281,8 @@ if (argc < 5) {
                 exit(1);
             }
 
-            struct PacketHeader ack_packet_header = parse_packet_header(ACK_buffer);
-            fprintf(log_fileptr, "%u %u %u %u\n", ack_packet_header.type, ack_packet_header.seqNum,
-                    ack_packet_header.length,
-                    ack_packet_header.checksum);
-            fflush(log_fileptr);
+            // Write to log
+            writeLog(packet_header,log_fileptr);
         }
 
         fclose(fileptr);

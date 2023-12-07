@@ -19,6 +19,8 @@
 #include <math.h>
 #include "PacketHeader.h"
 #include "crc32.h"
+#include <sys/stat.h>
+#include <sys/types.h>
 
 
 #define MAX_PACKET_LEN 1472
@@ -30,6 +32,7 @@
 #define ACK 3
 
 FILE* openFileForReadWrite(const char* filename) {
+    printf("Opening file %s\n", filename);
     FILE* fileptr = fopen(filename, "rb+");
     if (fileptr == nullptr) {
         // File doesn't exist, create and open for reading and writing
@@ -141,6 +144,11 @@ int main(int argc, char *argv[]) {
     int window_size = atoi(argv[2]);
     char *file_dir = argv[3];
 
+    // if not exist, create file_dir
+    if (access(file_dir, F_OK) == -1) {
+        printf("Creating directory %s\n", file_dir);
+        mkdir(file_dir, 0700);
+    }
     // Init log file pointer
     FILE *log_fileptr = fopen(log, "a+");
 

@@ -1,55 +1,53 @@
-#include "crc32.h"
-#include <assert.h>
+#include <iostream>
+#include <fstream>
+#include <string>
 #include <string.h>
-#include <assert.h>
-#include <string.h>
-#include <stdio.h>
 #include <unistd.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netdb.h>
-
+#include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <string.h>
+#include <sys/select.h>
+#include <vector>
+#include <algorithm>
+#include <cassert>
+#include <time.h>
+#include <sys/time.h>
+#include <math.h>
 #include "PacketHeader.h"
-/* Referred to eecs489 pa1 for some functions and also used some of the code from the starter code */
-#define MAX_PACKET_LEN 1024
-#define MAX_BUFFER_LEN 1032
+#include "crc32.h"
 
-// Function to assemble a packet
+#define MAX_PACKET_LEN 1472
+#define MAX_BUFFER_LEN 2048
+
 size_t assemble_packet(char *buffer, unsigned int type, unsigned int seqNum, unsigned int length, char *chunk) {
     size_t packet_header_len = sizeof(struct PacketHeader);
     assert(packet_header_len + length <= MAX_PACKET_LEN);
 
-    // Create a PacketHeader struct
     struct PacketHeader packet_header = {type, seqNum, length, crc32(chunk, length)};
 
-    // Copy the PacketHeader to the buffer
     memcpy(buffer, &packet_header, packet_header_len);
-
-    // Copy the chunk data to the buffer after the header
     memcpy(buffer + packet_header_len, chunk, length);
 
-    // Return the total length of the packet
     return packet_header_len + length;
 }
 
-// Function to parse a packet header from a buffer
-struct PacketHeader get_header_from_buffer(char *buffer) {
+struct PacketHeader parse_packet_header(char *buffer) {
     struct PacketHeader packet_header;
     memcpy(&packet_header, buffer, sizeof(struct PacketHeader));
     return packet_header;
 }
 
-// Function to parse a chunk from a buffer
 size_t parse_chunk(char *buffer, char *chunk) {
-    struct PacketHeader packet_header = get_header_from_buffer(buffer);
+    struct PacketHeader packet_header = parse_packet_header(buffer);
     size_t packet_len = packet_header.length;
     memcpy(chunk, buffer + sizeof(struct PacketHeader), packet_len);
     return packet_len;
 }
 
-// Function to write the nth chunk to a file
 size_t fwrite_nth_chunk(char *chunk, int n, size_t chunk_len, FILE *fileptr) {
     size_t max_chunk_len = MAX_PACKET_LEN - sizeof(struct PacketHeader);
     long offset = max_chunk_len * n;
@@ -57,37 +55,25 @@ size_t fwrite_nth_chunk(char *chunk, int n, size_t chunk_len, FILE *fileptr) {
     long cur_offset = ftell(fileptr);
     fseek(fileptr, offset - cur_offset, SEEK_CUR);
 
-    // Write the chunk to the file
     fwrite(chunk, chunk_len, 1, fileptr);
-
-    // Return the length of the written chunk
     return chunk_len;
 }
 
-// Function to write to log
-void writeLog(struct PacketHeader h,FILE *f){
-    fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
-}
-
-// Function to left shift an array
 void move_window(int *array, int num_elements, int shift_by) {
     assert(num_elements > 0);
     assert(shift_by > 0);
     assert(shift_by <= num_elements);
 
-    // Calculate the number of elements to be shifted
-    int num_shifted_elements = num_elements - shift_by;
+    memmove(&array[0], &array[shift_by], (num_elements - shift_by) * sizeof(int));
 
-    // Use memmove to shift elements to the left
-    memmove(array, &array[shift_by], num_shifted_elements * sizeof(int));
-
-    // Fill the remaining elements with 0
-    memset(&array[num_shifted_elements], 0, shift_by * sizeof(int));
+    for (int i = num_elements - shift_by; i < num_elements; i++) {
+        array[i] = 0;
+    }
 }
 
 int main(int argc, char *argv[]) {
-if (argc < 5) {
-        fprintf(stderr, "Error: Usage is %s <port_num> <log> <window_size> <file_dir>\n", argv[0]);
+    if (argc < 5) {
+        std::cout << "Error: Usage is ./wReceiver <port_num> <log> <window_size> <file_dir>\n";
         return 1;
     }
 
@@ -98,10 +84,7 @@ if (argc < 5) {
 
     // Init log file pointer
     FILE *log_fileptr = fopen(log, "a+");
-    if (log_fileptr == NULL) {
-        perror("fopen");
-        exit(1);
-    }
+
     // Init UDP receiver
     int sockfd;
     struct sockaddr_in recv_addr;
@@ -134,7 +117,7 @@ if (argc < 5) {
     while (true) {
         // Init filename
         file_num++;
-        FILE *fileptr = NULL;
+        FILE *fileptr = nullptr;
         char chunk[MAX_PACKET_LEN];
         bzero(chunk, MAX_PACKET_LEN);
         char output_file[strlen(file_dir) + 10];
@@ -159,45 +142,40 @@ if (argc < 5) {
             char *send_ip = inet_ntoa(send_addr.sin_addr);
             int send_port = ntohs(send_addr.sin_port);
 
-            // Write to log
-            struct PacketHeader packet_header = get_header_from_buffer(buffer);
-            writeLog(packet_header,log_fileptr);
+            struct PacketHeader packet_header = parse_packet_header(buffer);
+            fprintf(log_fileptr, "%u %u %u %u\n", packet_header.type, packet_header.seqNum, packet_header.length,
+                    packet_header.checksum);
+            fflush(log_fileptr);
 
             bzero(chunk, MAX_PACKET_LEN);
             size_t chunk_len = parse_chunk(buffer, chunk);
 
-            // Check checksum
             if (crc32(chunk, chunk_len) != packet_header.checksum) {
                 printf("Checksum incorrect\n");
                 continue;
             }
 
             int seqNum = -1;
+            bool should_continue = false;
             switch (packet_header.type) {
                 case 0:
-                    if (rand_num != -1) {
-                        if (rand_num != packet_header.seqNum) {
-                            printf("Duplicate START\n");
-                            continue;
-                        }
+                    if (rand_num != -1 && rand_num != packet_header.seqNum) {
+                        printf("Duplicate START\n");
+                        should_continue = true;
                     } else {
                         rand_num = packet_header.seqNum;
                         seqNum = packet_header.seqNum;
-                        
-                        if (fileptr == NULL) {
+                        if (fileptr == nullptr) {
                             fileptr = fopen(output_file, "wb+");
-                            if (fileptr == NULL) {
-                                perror("fopen");
-                                exit(1);
-                            }
+                            fclose(fileptr);
+                            fileptr = fopen(output_file, "rb+");
                         }
                     }
                     break;
-
                 case 1:
                     if (rand_num != packet_header.seqNum && rand_num != -1) {
                         printf("END seqNum not same as START\n");
-                        continue;
+                        should_continue = true;
                     } else {
                         seqNum = packet_header.seqNum;
                         completed = true;
@@ -207,20 +185,23 @@ if (argc < 5) {
                 case 2:
                     if (rand_num == -1) {
                         printf("No START received\n");
-                        continue;
+                        should_continue = true;
                     } else {
                         if (packet_header.seqNum < window_start) {
-                            seqNum = window_start;
+                            seqNum = packet_header.seqNum;
                         } else if (packet_header.seqNum > window_start) {
-                            seqNum = window_start;
                             if (packet_header.seqNum < window_start + window_size) {
+                                seqNum = packet_header.seqNum;
                                 if (status[packet_header.seqNum - window_start] == 0) {
                                     status[packet_header.seqNum - window_start] = 1;
                                     fwrite_nth_chunk(chunk, packet_header.seqNum, chunk_len, fileptr);
                                 }
+                            } else {
+                                should_continue = true;
                             }
                         } else {
                             // packet_header.seqNum == window_start
+                            seqNum = packet_header.seqNum;
                             if (status[0] == 0) {
                                 status[0] = 1;
                                 fwrite_nth_chunk(chunk, packet_header.seqNum, chunk_len, fileptr);
@@ -235,28 +216,31 @@ if (argc < 5) {
                                 }
                             }
                             window_start += shift_by;
-                            seqNum = window_start;
                             move_window(status, window_size, shift_by);
                         }
                     }
                     break;
                 default:
-                    continue;
+                    should_continue = true;
                     break;
+            }
+
+            if (should_continue) {
+                continue;
             }
 
             // Init ACK sender
             struct sockaddr_in ACK_addr;
-            struct hostent *otherHost;
+            struct hostent *he;
 
-            if ((otherHost = gethostbyname(send_ip)) == NULL) {
+            if ((he = gethostbyname(send_ip)) == NULL) {
                 perror("gethostbyname");
                 exit(1);
             }
 
             ACK_addr.sin_family = AF_INET;
             ACK_addr.sin_port = htons(send_port);
-            ACK_addr.sin_addr = *((struct in_addr *) otherHost->h_addr);
+            ACK_addr.sin_addr = *((struct in_addr *) he->h_addr);
             memset(&(ACK_addr.sin_zero), '\0', 8);
 
             char ACK_buffer[MAX_BUFFER_LEN];
@@ -268,14 +252,19 @@ if (argc < 5) {
             assert(seqNum >= 0);
             size_t ACK_packet_len = assemble_packet(ACK_buffer, 3, seqNum, 0, empty_chunk);
 
-            if ((numbytes = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
-                                   (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
-                perror("sendto");
-                exit(1);
-            }
 
-            // Write to log
-            writeLog(packet_header,log_fileptr);
+                if ((numbytes = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
+                                       (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
+                    perror("sendto");
+                    exit(1);
+                }
+
+
+            struct PacketHeader ack_packet_header = parse_packet_header(ACK_buffer);
+            fprintf(log_fileptr, "%u %u %u %u\n", ack_packet_header.type, ack_packet_header.seqNum,
+                    ack_packet_header.length,
+                    ack_packet_header.checksum);
+            fflush(log_fileptr);
         }
 
         fclose(fileptr);

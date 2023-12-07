@@ -38,7 +38,8 @@ unsigned int get_content_at(int i,char *content,FILE *f,long file_size){
     if(end >= file_size) end = file_size-1;
     long read_len = end - begin + 1;
     // offset
-    fseek(f, begin, SEEK_SET);
+    // fseek(f, begin, SEEK_SET);
+    fseek(f, begin - ftell(f), SEEK_CUR);
     fread(content, read_len, sizeof(char), f);
     return read_len;
 }

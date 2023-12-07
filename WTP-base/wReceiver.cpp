@@ -19,6 +19,8 @@
 #include <math.h>
 #include "PacketHeader.h"
 #include "crc32.h"
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #define MAX_PACKET_LEN 1472
 #define MAX_BUFFER_LEN 2048
@@ -78,10 +80,14 @@ int main(int argc, char *argv[]) {
     }
 
     int port_num = atoi(argv[1]);
-    char *log = argv[2];
-    int window_size = atoi(argv[3]);
-    char *file_dir = argv[4];
-
+    char *log = argv[4];
+    int window_size = atoi(argv[2]);
+    char *file_dir = argv[3];
+    // if not exist, create file_dir
+    if (access(file_dir, F_OK) == -1) {
+        printf("Creating directory %s\n", file_dir);
+        mkdir(file_dir, 0700);
+    }
     // Init log file pointer
     FILE *log_fileptr = fopen(log, "a+");
 
