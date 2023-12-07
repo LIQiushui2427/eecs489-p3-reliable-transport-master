@@ -31,6 +31,19 @@
 #define END 1
 #define DATA 2
 #define ACK 3
+
+FILE* open_file(char *path,char *state){
+    int len = strlen(path);
+    for(int i=0;i<len;i++){
+        if(path[i]=='/'){
+            path[i]=0;
+            if (access(path, F_OK) != 0) mkdir(path, 0777);
+            path[i]='/';
+        }
+    }
+    FILE *f_log=fopen(path, state);
+    return f_log;
+}
 bool createDirectory(const char *path) {
     int status = mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     if (status == 0 || errno == EEXIST) {
@@ -142,7 +155,6 @@ void move_window(int *array, int num_elements, int shift_by) {
 void writeLog(struct PacketHeader h,FILE *f){
     fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
 }
-
 int main(int argc, char *argv[]) {
     if (argc < 5) {
         std::cout << "Error: Usage is ./wReceiver <port_num> <log> <window_size> <file_dir>\n";
@@ -159,20 +171,9 @@ int main(int argc, char *argv[]) {
         printf("Creating directory %s\n", file_dir);
         mkdir(file_dir, 0700);
     }
-    // Init log file pointer
-    printf("Log file: %s\n", log);
-    std::string logFilePath(log);
-    size_t lastSlash = logFilePath.find_last_of('/');
-    std::string directory = logFilePath.substr(0, lastSlash);
-    std::string fileName = logFilePath.substr(lastSlash + 1);
-
-    printf("Directory: %s\n", directory.c_str());
-    printf("Filename: %s\n", fileName.c_str());
-    if (!createDirectory(directory.c_str())) {
-        return 1;
-    }
-    std::string logFileFullPath = directory + "/" + fileName;
-    FILE *log_fileptr = fopen(log, "a+");
+    
+    //initialize log file
+    FILE *log_fileptr = open_file(log,"a+");
 
     // Init UDP receiver
     int sockfd;

@@ -30,15 +30,17 @@
 #define DATA 2
 #define ACK 3
 
-bool createDirectory(const char *path) {
-    int status = mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-    if (status == 0 || errno == EEXIST) {
-        return true;
-    } else {
-        std::cerr << "Error creating directory: " << path << std::endl;
-        perror("mkdir");
-        return false;
+FILE* open_file(char *path,char *state){
+    int len = strlen(path);
+    for(int i=0;i<len;i++){
+        if(path[i]=='/'){
+            path[i]=0;
+            if (access(path, F_OK) != 0) mkdir(path, 0777);
+            path[i]='/';
+        }
     }
+    FILE *f_log=fopen(path, state);
+    return f_log;
 }
 FILE* openFileForReadWrite(const char* filename) {
     FILE* fileptr = fopen(filename, "rb+");
@@ -141,28 +143,14 @@ int main(int argc, char *argv[]) {
     char *file_dir = argv[3];
 
     // if not exist, create file_dir
+    // if not exist, create file_dir
     if (access(file_dir, F_OK) == -1) {
         printf("Creating directory %s\n", file_dir);
         mkdir(file_dir, 0700);
     }
-    // Initialize log file pointer
-    printf("Log file: %s\n", log);
-    std::string logFilePath(log);
-    size_t lastSlash = logFilePath.find_last_of('/');
-    std::string directory = logFilePath.substr(0, lastSlash);
-    std::string fileName = logFilePath.substr(lastSlash + 1);
 
-    printf("Directory: %s\n", directory.c_str());
-    printf("Filename: %s\n", fileName.c_str());
-    if (!createDirectory(directory.c_str())) {
-        return 1;
-    }
-    std::string logFileFullPath = directory + "/" + fileName;
-    FILE *log_fileptr = std::fopen(log, "a+");
-    if (log_fileptr == nullptr) {
-        perror("fopen");
-        return 1;
-    }
+    //initialize log file
+    FILE *log_fileptr = open_file(log,"a+");
 
     // Initialize UDP receiver
     int sockfd;

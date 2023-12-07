@@ -6,6 +6,8 @@
 #include <arpa/inet.h>
 #include <math.h>
 #include <sys/time.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "PacketHeader.h"
 #include "crc32.h"
 
@@ -89,13 +91,25 @@ int get_socket(struct timeval* timeout){
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(timeout));
     return sockfd;
 }
-
+FILE* open_log(char *path){
+    int len = strlen(path);
+    for(int i=0;i<len;i++){
+        if(path[i]=='/'){
+            path[i]=0;
+            if (access(path, F_OK) != 0) mkdir(path, 0777);
+            path[i]='/';
+        }
+    }
+    FILE *f_log=fopen(path, "a+");
+    return f_log;
+}
 int main(int argc, char *argv[]) {
     char *receiver_ip = argv[1];
     int receiver_port = atoi(argv[2]);
     int window_size = atoi(argv[3]);
     FILE *f_input = fopen(argv[4], "r");
-    FILE *f_log = fopen(argv[5], "a+");
+    FILE *f_log = open_log(argv[5]);
+
     fseek(f_input, 0, SEEK_END);
     long file_size = ftell(f_input);
     int total_amount_of_contents = ceil((double) file_size / (WTP_DATA_LEN));
