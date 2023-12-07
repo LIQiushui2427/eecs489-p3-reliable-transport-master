@@ -21,6 +21,7 @@
 #include "crc32.h"
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <filesystem>
 
 
 #define MAX_PACKET_LEN 1472
@@ -30,7 +31,16 @@
 #define END 1
 #define DATA 2
 #define ACK 3
-
+bool createDirectory(const char *path) {
+    int status = mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    if (status == 0 || errno == EEXIST) {
+        return true;
+    } else {
+        std::cerr << "Error creating directory: " << path << std::endl;
+        perror("mkdir");
+        return false;
+    }
+}
 FILE* openFileForReadWrite(const char* filename) {
     printf("Opening file %s\n", filename);
     FILE* fileptr = fopen(filename, "rb+");
@@ -150,6 +160,18 @@ int main(int argc, char *argv[]) {
         mkdir(file_dir, 0700);
     }
     // Init log file pointer
+    printf("Log file: %s\n", log);
+    std::string logFilePath(log);
+    size_t lastSlash = logFilePath.find_last_of('/');
+    std::string directory = logFilePath.substr(0, lastSlash);
+    std::string fileName = logFilePath.substr(lastSlash + 1);
+
+    printf("Directory: %s\n", directory.c_str());
+    printf("Filename: %s\n", fileName.c_str());
+    if (!createDirectory(directory.c_str())) {
+        return 1;
+    }
+    std::string logFileFullPath = directory + "/" + fileName;
     FILE *log_fileptr = fopen(log, "a+");
 
     // Init UDP receiver
@@ -183,12 +205,11 @@ int main(int argc, char *argv[]) {
 
     while (true) {
         // Init filename
-        file_num++;
         FILE *fileptr = nullptr;
         char chunk[MAX_PACKET_LEN];
         memset(chunk, 0, MAX_PACKET_LEN);
-        char output_file[strlen(file_dir) + 10];
-        sprintf(output_file, "%s/FILE-%d", file_dir, file_num);
+        char output_file[strlen(file_dir) + 15];
+        sprintf(output_file, "%s/FILE-%d.out", file_dir, file_num++);
 
         int rand_num = -1; // END seqNum should be the same as START;
 
