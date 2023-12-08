@@ -165,7 +165,15 @@ void move_window(int *array, int num_elements, int step) {
         array[i] = 0;
     }
 }
-
+void commit_step(bool *cont, int seqNum, int window_s, int window_length, int *windowStatusArr) {
+    // if cont is false, then change it to true, the cont should be change outside the function
+    if (!*cont) {
+        *cont = true;
+    }
+    std::cout << "Commit step\n";
+    std::cout << "seqNum: " << seqNum << std::endl;
+    std::cout << "window_s: " << window_s << std::endl;
+}
 void writeLog(struct PacketHeader h,FILE *f){
     std::cout << h.type << " " << h.seqNum << " " << h.length << " " << h.checksum << std::endl;
     fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
@@ -236,6 +244,7 @@ int main(int argc, char *argv[]) {
 
         bool completedFlag = false;
         while (!completedFlag) {
+            // Receive packet
             if ((numbytes = recvfrom(sockfd, buffer, MAX_BUFFER_LEN - 1, 0,
                                      (struct sockaddr *) &send_addr, (socklen_t *) &addr_len)) == -1) {
                 std::cerr << "Error receiving packet" << std::endl;
@@ -257,7 +266,7 @@ int main(int argc, char *argv[]) {
             }
 
             int seqNum = -1;
-            bool should_continue = false;
+            bool cont = false;
             if (header.type == 0 && !(seqNumCursor != -1 && seqNumCursor != header.seqNum)){
                         seqNumCursor = header.seqNum;
                         seqNum = header.seqNum;
@@ -268,7 +277,7 @@ int main(int argc, char *argv[]) {
                 else if (header.type == 1) {
                     if (seqNumCursor != header.seqNum && seqNumCursor != -1) {
                         std::cout << "END seqNum incorrect\n";
-                        should_continue = true;
+                        commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                     } else {
                         seqNum = header.seqNum;
                         completedFlag = true;
@@ -278,7 +287,7 @@ int main(int argc, char *argv[]) {
                 else if (header.type == 2) {
                     if (seqNumCursor == -1) {
                         std::cout << "START not received\n";
-                        should_continue = true;
+                        commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                     } else {
                         if (header.seqNum < window_s) {
                             seqNum = header.seqNum;
@@ -290,7 +299,9 @@ int main(int argc, char *argv[]) {
                                     writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
                                 }
                             } else {
-                                should_continue = true;
+                                std::cout << "seqNum out of window\n";
+                                std::cout << "header.seqNum: " << header.seqNum << std::endl;
+                                commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                             }
                         } else {
                             // header.seqNum == window_s
@@ -313,10 +324,10 @@ int main(int argc, char *argv[]) {
                         }
                     }
                 } else {
-                    should_continue = true;
+                    cont = true;
                 }
 
-            if (should_continue) {
+            if (cont) {
                 continue;
             }
 
