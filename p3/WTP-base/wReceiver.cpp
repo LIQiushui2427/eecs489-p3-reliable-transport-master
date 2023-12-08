@@ -33,6 +33,13 @@
 /*Referred to EECS489 p3 in github. We added our understanding and made our own implementation
 We make the sample code run in the autograder to test the behaviour of autograder. */
 /*https://github.com/zianke/eecs489-p3-reliable-transport*/
+#include <fstream>
+
+std::ifstream::pos_type filesize(const char* filename)
+{
+    std::ifstream in(filename, std::ifstream::ate | std::ifstream::binary);
+    return in.tellg(); 
+}
 class FileWorker 
 {
     public:
@@ -102,11 +109,11 @@ class WTPHandler
         WTPHandler();
         ~WTPHandler();
         int getError();
-        struct PacketHeader generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *chunk);
-        void copyPacketData(char *tmpBuffer, const struct PacketHeader *header, const char *chunk);
-        size_t createAndFillPacket(char *tmpBuffer, unsigned int type, unsigned int seqNum, unsigned int length, char *chunk);
+        struct PacketHeader generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *datapiece);
+        void copyPacketData(char *tmpBuffer, const struct PacketHeader *header, const char *datapiece);
+        size_t createAndFillPacket(char *tmpBuffer, unsigned int type, unsigned int seqNum, unsigned int length, char *datapiece);
         struct PacketHeader parse_packet_header(char *tmpBuffer);
-        size_t parse_chunk(char *tmpBuffer, char *chunk);
+        size_t parse_chunk(char *tmpBuffer, char *datapiece);
         size_t writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, FILE *outputFile);
         void move_window(int *array, int num_elements, int step);
         void writeLog(struct PacketHeader h,FILE *f);
@@ -121,22 +128,22 @@ WTPHandler::~WTPHandler(){
 int WTPHandler::getError(){
     return error;
 };
-struct PacketHeader WTPHandler::generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *chunk) {
-    return {type, seqNum, length, crc32(chunk, length)};
+struct PacketHeader WTPHandler::generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *datapiece) {
+    return {type, seqNum, length, crc32(datapiece, length)};
 }
 
-void WTPHandler::copyPacketData(char *tmpBuffer, const struct PacketHeader *header, const char *chunk) {
+void WTPHandler::copyPacketData(char *tmpBuffer, const struct PacketHeader *header, const char *datapiece) {
     size_t packet_header_len = sizeof(struct PacketHeader);
     memcpy(tmpBuffer, header, packet_header_len);
-    memcpy(tmpBuffer + packet_header_len, chunk, header->length);
+    memcpy(tmpBuffer + packet_header_len, datapiece, header->length);
 }
-size_t WTPHandler::createAndFillPacket(char *tmpBuffer, unsigned int type, unsigned int seqNum, unsigned int length, char *chunk) {
+size_t WTPHandler::createAndFillPacket(char *tmpBuffer, unsigned int type, unsigned int seqNum, unsigned int length, char *datapiece) {
     size_t packet_header_len = sizeof(struct PacketHeader);
     assert(packet_header_len + length <= MAX_PACKET_LEN);
 
-    struct PacketHeader header = generatePacketHeader(type, seqNum, length, chunk);
+    struct PacketHeader header = generatePacketHeader(type, seqNum, length, datapiece);
 
-    copyPacketData(tmpBuffer, &header, chunk);
+    copyPacketData(tmpBuffer, &header, datapiece);
 
     return packet_header_len + length;
 }
@@ -146,11 +153,11 @@ struct PacketHeader WTPHandler::parse_packet_header(char *tmpBuffer) {
     return header;
 }
 
-size_t WTPHandler::parse_chunk(char *tmpBuffer, char *chunk) {
+size_t WTPHandler::parse_chunk(char *tmpBuffer, char *datapiece) {
     // Parse packet header
     struct PacketHeader header = parse_packet_header(tmpBuffer); //create a packet header
     size_t packet_len = header.length;
-    memcpy(chunk, tmpBuffer + sizeof(struct PacketHeader), packet_len);
+    memcpy(datapiece, tmpBuffer + sizeof(struct PacketHeader), packet_len);
     return packet_len;
 }
 
@@ -251,10 +258,10 @@ int main(int argc, char *argv[]) {
     WTPHandler wtpHandler;
     // Initialize UDP receiver
     int socketfd;
-    struct sockaddr_in recv_addr;
-    struct sockaddr_in send_addr;
+    struct sockaddr_in recv_address;
+    struct sockaddr_in send_address;
     int addr_len = sizeof(struct sockaddr);
-    int numbytes;
+    int counter;
     char tmpBuffer[MAX_BUFFER_LEN];
     memset(tmpBuffer, 0, MAX_BUFFER_LEN);
 
@@ -264,12 +271,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    recv_addr.sin_family = AF_INET;
-    recv_addr.sin_port = htons(port_num);
-    recv_addr.sin_addr.s_addr = INADDR_ANY;
-    memset(&(recv_addr.sin_zero), '\0', 8);
+    recv_address.sin_family = AF_INET;
+    recv_address.sin_port = htons(port_num);
+    recv_address.sin_addr.s_addr = INADDR_ANY;
+    memset(&(recv_address.sin_zero), '\0', 8);
 
-    if (bind(socketfd, reinterpret_cast<struct sockaddr *>(&recv_addr), sizeof(struct sockaddr)) == -1) {
+    if (bind(socketfd, reinterpret_cast<struct sockaddr *>(&recv_address), sizeof(struct sockaddr)) == -1) {
         perror("bind");
         std::fclose(log_fileptr);
         close(socketfd);
@@ -281,8 +288,8 @@ int main(int argc, char *argv[]) {
     int windowStatusArr[window_length]; // 0: not 
     while (true) {
         FILE *fileptr = nullptr;
-        char chunk[MAX_PACKET_LEN];
-        bzero(chunk, MAX_PACKET_LEN);
+        char datapiece[MAX_PACKET_LEN];
+        bzero(datapiece, MAX_PACKET_LEN);
         char output_file[strlen(file_dir) + 15];
         sprintf(output_file, "%s/FILE-%d.out", file_dir, file_num++);
 
@@ -292,27 +299,32 @@ int main(int argc, char *argv[]) {
         memset(windowStatusArr, 0, window_length * sizeof(int));
         window_s = 0;
 
-        bool completed = false;
+        bool completedFlag = false;
         std::cout << "Waiting for packets...\n";
-        while (!completed) {
-            if ((numbytes = recvfrom(socketfd, tmpBuffer, MAX_BUFFER_LEN - 1, 0,
-                                     (struct sockaddr *) &send_addr, (socklen_t *) &addr_len)) == -1) {
+        while (!completedFlag) {
+            if ((counter = recvfrom(socketfd, tmpBuffer, MAX_BUFFER_LEN - 1, 0,
+                                     (struct sockaddr *) &send_address, (socklen_t *) &addr_len)) == -1) {
                 std::cerr << "Error receiving packet\n";
                 exit(1);
             }
-            printf("Received packet from %s:%d\n", inet_ntoa(send_addr.sin_addr), ntohs(send_addr.sin_port));
+            printf("Received packet from %s:%d\n", inet_ntoa(send_address.sin_addr), ntohs(send_address.sin_port));
+            std::cout << "Packet length: " << counter << std::endl;
+            std::cout << "Packet content: " << tmpBuffer << std::endl;
+            std::cout << "Packet content (hex): ";
+            for (int i = 0; i < counter; i++) {
+                printf("%02x ", tmpBuffer[i]);
+            }
 
-
-            char *send_ip = inet_ntoa(send_addr.sin_addr);
-            int send_port = ntohs(send_addr.sin_port);
+            char *sender_location_ip = inet_ntoa(send_address.sin_addr);
+            int send_port = ntohs(send_address.sin_port);
 
             struct PacketHeader header = wtpHandler.parse_packet_header(tmpBuffer);
             wtpHandler.writeLog(header,log_fileptr);
 
-            memset(chunk, 0, MAX_PACKET_LEN);
-            size_t chunk_len = wtpHandler.parse_chunk(tmpBuffer, chunk);
+            memset(datapiece, 0, MAX_PACKET_LEN);
+            size_t chunk_len = wtpHandler.parse_chunk(tmpBuffer, datapiece);
 
-            if (crc32(chunk, chunk_len) != header.checksum) {
+            if (crc32(datapiece, chunk_len) != header.checksum) {
                 std::cerr << "Checksum mismatch\n" << std::endl;
                 continue;
             }
@@ -334,7 +346,7 @@ int main(int argc, char *argv[]) {
                     wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
                 } else {
                     seqNum = header.seqNum;
-                    completed = true;
+                    completedFlag = true;
                     rand_num = -1;
                 }
             } else if (header.type == DATA) {
@@ -348,7 +360,7 @@ int main(int argc, char *argv[]) {
                         if (windowStatusArr[0] == 0) {
                             windowStatusArr[0] = 1;
                             assert(fileptr != nullptr);
-                            wtpHandler.writeNthChunkToFile(chunk, header.seqNum, chunk_len, fileptr);
+                            wtpHandler.writeNthChunkToFile(datapiece, header.seqNum, chunk_len, fileptr);
                         }
 
                         int step = 0;
@@ -369,18 +381,18 @@ int main(int argc, char *argv[]) {
             }
 
             // Init ACK sender
-            struct sockaddr_in ACK_addr;
+            struct sockaddr_in ACK_address;
             struct hostent *otherHost;
 
-            if ((otherHost = gethostbyname(send_ip)) == NULL) {
+            if ((otherHost = gethostbyname(sender_location_ip)) == NULL) {
                 perror("gethostbyname");
                 exit(1);
             }
 
-            ACK_addr.sin_family = AF_INET;
-            ACK_addr.sin_port = htons(send_port);
-            ACK_addr.sin_addr = *((struct in_addr *) otherHost->h_addr);
-            memset(&(ACK_addr.sin_zero), '\0', 8);
+            ACK_address.sin_family = AF_INET;
+            ACK_address.sin_port = htons(send_port);
+            ACK_address.sin_addr = *((struct in_addr *) otherHost->h_addr);
+            memset(&(ACK_address.sin_zero), '\0', 8);
 
             char ACK_buffer[MAX_BUFFER_LEN];
             memset(ACK_buffer, 0, MAX_BUFFER_LEN);
@@ -391,8 +403,8 @@ int main(int argc, char *argv[]) {
             assert(seqNum >= 0);
             size_t ACK_packet_len = wtpHandler.createAndFillPacket(ACK_buffer, 3, seqNum, 0, empty_chunk);
 
-            if ((numbytes = sendto(socketfd, ACK_buffer, ACK_packet_len, 0,
-                                   (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
+            if ((counter = sendto(socketfd, ACK_buffer, ACK_packet_len, 0,
+                                   (struct sockaddr *) &ACK_address, sizeof(struct sockaddr))) == -1) {
                 std::cerr << "Error sending ACK packet\n";
                 exit(1);
             }
@@ -401,6 +413,10 @@ int main(int argc, char *argv[]) {
         }
         std::cout << "File transfer complete\n";
         fclose(fileptr);
+        if (completedFlag) {
+            std::cout << "File saved to " << output_file << std::endl;
+            std::cout << "File size: " << filesize(output_file) << std::endl;
+        }
     }
     std::cout << "Closing socket\n";
     close(socketfd);

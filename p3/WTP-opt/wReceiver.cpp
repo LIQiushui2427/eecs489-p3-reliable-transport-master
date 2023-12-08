@@ -35,6 +35,12 @@
 
 /*Referred to EECS489 p3 in github. We added our understanding and made our own implementation*/
 /*https://github.com/zianke/eecs489-p3-reliable-transport*/
+#include <fstream>
+std::ifstream::pos_type filesize(const char* filename)
+{
+    std::ifstream in(filename, std::ifstream::ate | std::ifstream::binary);
+    return in.tellg(); 
+}
 class FileWorker 
 {
     public:
@@ -43,6 +49,7 @@ class FileWorker
         FileWorker();
         ~FileWorker();
         int getError();
+        void debug(char *msg);
         FILE* open_file(char *path,char *state);
         bool createDirectory(const char *path);
         FILE* openFileForReadWrite(const char* filename);
@@ -54,6 +61,9 @@ FileWorker::FileWorker(){
 FileWorker::~FileWorker(){
     error = 0;
 };
+void FileWorker::debug(char *msg){
+    std::cout << msg << std::endl;
+}
 int FileWorker::getError(){
     return error;
 };
@@ -84,6 +94,13 @@ bool FileWorker::createDirectory(const char *path) {
     } else {
         std::cerr << "Error creating directory: " << path << std::endl;
         perror("mkdir");
+        for (int i = 0; i < 10; i++) {
+            sleep(1);
+            if (mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == 0) {
+                return true;
+            }
+            std::cout << "Error creating directory: " << path << std::endl;
+        }
         return false;
     }
 }
@@ -228,52 +245,57 @@ void WTPHandler::writeLog(struct PacketHeader h,FILE *f){
 }
 int main(int argc, char *argv[]) {
     if (argc < 5) {
-        std::cout << "Error: Usage is ./wReceiver <port_num> <log> <window_size> <file_dir>\n";
+        std::cout << "Error: Usage is ./wReceiver <port_num> <log> <window_length> <file_dir>\n";
         return 1;
     }
 
     int port_num = atoi(argv[1]);
     char *log = argv[4];
-    int window_size = atoi(argv[2]);
+    int window_length = atoi(argv[2]);
     char *file_dir = argv[3];
 
     // if not exist, create file_dir
     if (access(file_dir, F_OK) == -1) {
         printf("Creating directory %s\n", file_dir);
         std::filesystem::create_directory(file_dir);
+        if (access(file_dir, F_OK) == -1) {
+            std::cerr << "Error creating directory: " << file_dir << std::endl;
+            perror("mkdir");
+            exit(1);
+        }
     }
     FileWorker fw;
     //initialize log file
-    FILE *log_fileptr = fw.open_file(log,"a+");
+    FILE *logFilePtr = fw.open_file(log,"a+");
 
     // Init UDP receiver
     int sockfd;
-    struct sockaddr_in recv_addr;
-    struct sockaddr_in send_addr;
+    struct sockaddr_in receiver_loc;
+    struct sockaddr_in sender_loc_addr;
     int addr_len = sizeof(struct sockaddr);
-    int numbytes;
+    int counter;
     char buffer[MAX_BUFFER_LEN];
     memset(buffer, 0, MAX_BUFFER_LEN);
 
     WTPHandler wtpHandler;
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
-        perror("socket");
+        std::cerr << "Error creating socket" << std::endl;
         exit(1);
     }
 
-    recv_addr.sin_family = AF_INET;
-    recv_addr.sin_port = htons(port_num);
-    recv_addr.sin_addr.s_addr = INADDR_ANY;
-    memset(&(recv_addr.sin_zero), '\0', 8);
+    receiver_loc.sin_family = AF_INET;
+    receiver_loc.sin_port = htons(port_num);
+    receiver_loc.sin_addr.s_addr = INADDR_ANY;
+    memset(&(receiver_loc.sin_zero), '\0', 8);
 
-    if (bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(struct sockaddr)) == -1) {
+    if (bind(sockfd, (struct sockaddr *) &receiver_loc, sizeof(struct sockaddr)) == -1) {
         std::cerr << "Error binding to port " << port_num << std::endl;
         exit(1);
     }
 
-    int file_num = 0;
+    int fileIndex = 0;
     int window_s = 0;
-    int windowStatusArr[window_size]; // 0: not received, 1: received and acked
+    int windowStatusArr[window_length]; // 0: not received, 1: received and acked
 
     while (true) {
         // Init filename
@@ -281,12 +303,12 @@ int main(int argc, char *argv[]) {
         char dataChunk[MAX_PACKET_LEN];
         memset(dataChunk, 0, MAX_PACKET_LEN);
         char output_file[strlen(file_dir) + 15];
-        sprintf(output_file, "%s/FILE-%d.out", file_dir, file_num++);
+        sprintf(output_file, "%s/FILE-%d.out", file_dir, fileIndex++);
 
         int seqNumCursor = -1; // END seqNum should be the same as START;
 
         // Reset receive window
-        for (int i = 0; i < window_size; i++) {
+        for (int i = 0; i < window_length; i++) {
             windowStatusArr[i] = 0;
         }
         window_s = 0;
@@ -294,105 +316,114 @@ int main(int argc, char *argv[]) {
         bool completedFlag = false;
         while (!completedFlag) {
             // Receive packet
-            if ((numbytes = recvfrom(sockfd, buffer, MAX_BUFFER_LEN - 1, 0,
-                                     (struct sockaddr *) &send_addr, (socklen_t *) &addr_len)) == -1) {
+            if ((counter = recvfrom(sockfd, buffer, MAX_BUFFER_LEN - 1, 0,
+                                     (struct sockaddr *) &sender_loc_addr, (socklen_t *) &addr_len)) == -1) {
                 std::cerr << "Error receiving packet" << std::endl;
                 exit(1);
             }
+            std::cout << "Packet length: " << counter << std::endl;
+            std::cout << "Packet content: " << buffer << std::endl;
+            std::cout << "Packet content (hex): ";
+            for (int i = 0; i < counter; i++) {
+                printf("%02x ", buffer[i]);
+            }
 
-            char *send_ip = inet_ntoa(send_addr.sin_addr);
-            int send_port = ntohs(send_addr.sin_port);
+            char *sender_location_ip = inet_ntoa(sender_loc_addr.sin_addr);
+            int send_port = ntohs(sender_loc_addr.sin_port);
 
             struct PacketHeader header = wtpHandler.getHeaderFromPacket(buffer);
-            wtpHandler.writeLog(header,log_fileptr);
+            wtpHandler.writeLog(header,logFilePtr);
 
             memset(dataChunk, 0, MAX_PACKET_LEN);
-            size_t chunk_len = wtpHandler.parse_chunk(buffer, dataChunk);
+            size_t chunk_lenngth_in_bytes = wtpHandler.parse_chunk(buffer, dataChunk);
 
-            if (crc32(dataChunk, chunk_len) != header.checksum) {
+            if (crc32(dataChunk, chunk_lenngth_in_bytes) != header.checksum) {
                 std::cout << "Checksum incorrect\n";
                 continue;
             }
 
             int seqNum = -1;
             bool cont = false;
-            if (header.type == 0 && !(seqNumCursor != -1 && seqNumCursor != header.seqNum)){
+            if (header.type == START && !(seqNumCursor != -1 && seqNumCursor != header.seqNum)){
                         seqNumCursor = header.seqNum;
                         seqNum = header.seqNum;
                         if (fileptr == nullptr) {
                             fileptr = fw.openFileForReadWrite(output_file);
                         }
             }
-                else if (header.type == 1) {
-                    if (seqNumCursor != header.seqNum && seqNumCursor != -1) {
-                        std::cout << "END seqNum incorrect\n";
-                        wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
-                    } else {
-                        seqNum = header.seqNum;
-                        completedFlag = true;
-                        seqNumCursor = -1;
-                    }
+            else if (header.type == END) {
+                if (seqNumCursor != header.seqNum && seqNumCursor != -1) {
+                    std::cout << "END seqNum incorrect\n";
+                    wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
+                } else {
+                    seqNum = header.seqNum;
+                    completedFlag = true;
+                    seqNumCursor = -1;
                 }
-                else if (header.type == 2) {
-                    if (seqNumCursor == -1) {
-                        std::cout << "START not received\n";
-                        wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
-                    } else {
-                        if (header.seqNum < window_s) {
+            }
+            else if (header.type == DATA) {
+                if (seqNumCursor == -1) {
+                    std::cout << "START not received\n";
+                    wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
+                } else {
+                    if (header.seqNum < window_s) {
+                        seqNum = header.seqNum;
+                    } else if (header.seqNum > window_s) {
+                        if (header.seqNum < window_s + window_length) {
                             seqNum = header.seqNum;
-                        } else if (header.seqNum > window_s) {
-                            if (header.seqNum < window_s + window_size) {
-                                seqNum = header.seqNum;
-                                if (windowStatusArr[header.seqNum - window_s] == 0) {
-                                    windowStatusArr[header.seqNum - window_s] = 1;
-                                    wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
-                                }
-                            } else {
-                                std::cout << "seqNum out of window\n";
-                                std::cout << "header.seqNum: " << header.seqNum << std::endl;
-                                wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
+                            if (windowStatusArr[header.seqNum - window_s] == 0) {
+                                windowStatusArr[header.seqNum - window_s] = 1;
+                                wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_lenngth_in_bytes, fileptr);
                             }
                         } else {
-                            // header.seqNum == window_s
-                            seqNum = header.seqNum;
-                            if (windowStatusArr[0] == 0) {
-                                windowStatusArr[0] = 1;
-                                wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
-                            }
-
-                            int step = 0;
-                            for (int i = 0; i < window_size; i++) {
-                                if (windowStatusArr[i] == 1) {
-                                    step++;
-                                } else {
-                                    break;
-                                }
-                            }
-                            window_s += step;
-                            wtpHandler.move_window(windowStatusArr, window_size, step);
+                            std::cout << "seqNum out of window\n";
+                            std::cout << "header.seqNum: " << header.seqNum << std::endl;
+                            wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
                         }
+                    } else {
+                        // header.seqNum == window_s
+                        seqNum = header.seqNum;
+                        if (windowStatusArr[0] == 0) {
+                            windowStatusArr[0] = 1;
+                            wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_lenngth_in_bytes, fileptr);
+                        }
+
+                        int step = 0;
+                        for (int i = 0; i < window_length; i++) {
+                            if (windowStatusArr[i] == 1) {
+                                step=step+1;
+                                std::cout << "step: " << step << std::endl;
+                            } else {
+                                break;
+                            }
+                        }
+                        window_s += step;
+                        wtpHandler.move_window(windowStatusArr, window_length, step);
+                        std::cout << "window_s: " << window_s << std::endl;
                     }
-                } else {
-                    cont = true;
                 }
+            } else {
+                std::cout << "Unknown packet type\n";
+                wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
+            }
 
             if (cont) {
                 continue;
             }
 
             // Init ACK sender
-            struct sockaddr_in ACK_addr;
-            struct hostent *he;
+            struct sockaddr_in ACK_address;
+            struct hostent *endHost;
 
-            if ((he = gethostbyname(send_ip)) == NULL) {
+            if ((endHost = gethostbyname(sender_location_ip)) == NULL) {
                 perror("gethostbyname");
                 exit(1);
             }
 
-            ACK_addr.sin_family = AF_INET;
-            ACK_addr.sin_port = htons(send_port);
-            ACK_addr.sin_addr = *((struct in_addr *) he->h_addr);
-            memset(&(ACK_addr.sin_zero), '\0', 8);
+            ACK_address.sin_family = AF_INET;
+            ACK_address.sin_port = htons(send_port);
+            ACK_address.sin_addr = *((struct in_addr *) endHost->h_addr);
+            memset(&(ACK_address.sin_zero), '\0', 8);
 
             char ACK_buffer[MAX_BUFFER_LEN];
             memset(ACK_buffer, 0, MAX_BUFFER_LEN);
@@ -401,23 +432,25 @@ int main(int argc, char *argv[]) {
             memset(empty_chunk, 0, 1);
             assert(seqNum >= 0);
             size_t ACK_packet_len = wtpHandler.createAndFillPacket(ACK_buffer, 3, seqNum, 0, empty_chunk);
+            std::cout << "ACK packet length: " << ACK_packet_len << std::endl;
 
 
-                if ((numbytes = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
-                                       (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
-                    std::cerr << "Error sending ACK packet to " << send_ip << ":" << send_port << std::endl;
+                if ((counter = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
+                                       (struct sockaddr *) &ACK_address, sizeof(struct sockaddr))) == -1) {
+                    std::cerr << "Error sending ACK packet to " << sender_location_ip << ":" << send_port << std::endl;
                     exit(1);
                 }
-            std::cout << "ACK sent to " << send_ip << ":" << send_port << std::endl;
+            std::cout << "ACK sent to " << sender_location_ip << ":" << send_port << std::endl;
 
-            wtpHandler.writeLog(wtpHandler.getHeaderFromPacket(ACK_buffer),log_fileptr);
+            wtpHandler.writeLog(wtpHandler.getHeaderFromPacket(ACK_buffer),logFilePtr);
         }
 
         fclose(fileptr);
+
     }
     std::cout << "File transfer completedFlag" << std::endl;
     close(sockfd);
-    fclose(log_fileptr);
+    fclose(logFilePtr);
 
     return 0;
 }
