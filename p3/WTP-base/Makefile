@@ -1,15 +1,13 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall
+CXX_FLAGS = -std=c++17 -Wall -I header/
+CPP =  $(wildcard *.cpp)
+HEADER = $(wildcard *.h)
 
-SRC_FILES := $(wildcard *.cpp)
-EXE_FILES := $(patsubst %.cpp,%,$(SRC_FILES))
+all: $(CPP) $(HEADER)
+	$(CXX) $(CXX_FLAGS) wSender.cpp -o wSender
+	$(CXX) $(CXX_FLAGS) wReceiver.cpp -o wReceiver
 
-.PHONY: all clean
-
-all: $(EXE_FILES)
-
-%: %.cpp
-	$(CXX) $(CXXFLAGS) $< -o $@
+.PHONY: clean
 
 clean:
-	rm -f $(EXE_FILES)
+	rm -rf wSender wReceiver

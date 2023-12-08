@@ -32,6 +32,9 @@
 #define DATA 2
 #define ACK 3
 
+
+/*Referred to EECS489 p3 in github. We added our understanding and made our own implementation*/
+/*https://github.com/zianke/eecs489-p3-reliable-transport*/
 FILE* open_file(char *path,char *state){
     int len = strlen(path);
     for(int i=0;i<len;i++){
@@ -153,6 +156,7 @@ void move_window(int *array, int num_elements, int shift_by) {
 }
 
 void writeLog(struct PacketHeader h,FILE *f){
+    std::cout << h.type << " " << h.seqNum << " " << h.length << " " << h.checksum << std::endl;
     fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
 }
 int main(int argc, char *argv[]) {
@@ -169,7 +173,7 @@ int main(int argc, char *argv[]) {
     // if not exist, create file_dir
     if (access(file_dir, F_OK) == -1) {
         printf("Creating directory %s\n", file_dir);
-        mkdir(file_dir, 0700);
+        std::filesystem::create_directory(file_dir);
     }
     
     //initialize log file

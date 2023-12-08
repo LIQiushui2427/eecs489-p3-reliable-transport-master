@@ -88,7 +88,7 @@ void udp_disconnect(int sockfd,struct sockaddr_in* receiver_addr,struct sockaddr
 
 int get_socket(struct timeval* timeout){
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(*timeout));
     return sockfd;
 }
 FILE* open_log(char *path){

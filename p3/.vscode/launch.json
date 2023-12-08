@@ -8,8 +8,8 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": false,
-      "cwd": "/Users/user/Downloads/eecs489-p3-reliable-transport-master",
-      "program": "/Users/user/Downloads/eecs489-p3-reliable-transport-master/build/Debug/outDebug",
+      "cwd": "/Users/user/Downloads/p3/WTP-base",
+      "program": "/Users/user/Downloads/p3/WTP-base/build/Debug/outDebug",
       "MIMode": "lldb",
       "miDebuggerPath": "lldb",
       "setupCommands": [

@@ -23,6 +23,10 @@ int min(int x,int y){
     if(x < y) return x;
     return y;
 }
+int max(int x,int y){
+    if(x > y) return x;
+    return y;
+}
 struct PacketHeader get_packet_header(char * buffer){
     struct PacketHeader h;memcpy(&h, buffer, sizeof(struct PacketHeader));
     return h;
@@ -89,7 +93,7 @@ void udp_disconnect(int sockfd,struct sockaddr_in* receiver_addr,struct sockaddr
 
 int get_socket(struct timeval* timeout){
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, timeout, sizeof(*timeout));
     return sockfd;
 }
 
@@ -107,6 +111,7 @@ FILE* open_log(char *path){
 }
 
 int main(int argc, char *argv[]) {
+    printf("start!\n");
     char *receiver_ip = argv[1];
     int receiver_port = atoi(argv[2]);
     int window_size = atoi(argv[3]);
@@ -122,7 +127,7 @@ int main(int argc, char *argv[]) {
     rewind(f_input);
     // window, -1 = pending, 0 = sent, 1 = acked
     int sliding_window[window_size];
-    for(int i=0;i<window_size;i++) sliding_window[i]=-1;
+    for(int i=0;i<window_size;i++) sliding_window[i]=NOT_SENT;
     // rand
     R = rand();
     // socket issues
@@ -140,50 +145,62 @@ int main(int argc, char *argv[]) {
     int socket_fd = get_socket(&timeout);
     // udp connect!
     udp_connect(socket_fd,&receiver_addr,&ack_reply_addr,&addr_len,f_log);
+    printf("connected!\n");
     // sent content!
     unsigned int window_start = 0;
     int flag = 1;
     // init buffer
     char content[BUF_SIZE];memset(content,'\0',BUF_SIZE);char packet[BUF_SIZE];memset(packet,'\0',BUF_SIZE);char ack_reply[BUF_SIZE];memset(ack_reply,'\0',BUF_SIZE);
 
-    while (window_start != total_amount_of_contents) {
-        for (int i = 0; i < min(window_size, total_amount_of_contents - window_start); i++) {
-            if (sliding_window[i] == NOT_SENT || (flag && sliding_window[i] == NOT_ACKED)) {
-                unsigned int content_len = get_content_at(i+window_start,content,f_input,file_size);
-                unsigned int packet_len = get_packet(packet,content,2,i+window_start,content_len);
-                sendto(socket_fd, packet, packet_len, 0,(struct sockaddr *) &receiver_addr, sizeof(struct sockaddr));
-                sliding_window[i] = NOT_ACKED;
-                prt_log(get_packet_header(packet),f_log);
+    // 0 1 2 3 ... total_amount_of_contents-1
+    printf("cur_win=%d, tot_win=%d\n",window_start,total_amount_of_contents);
+    int acked;
+    while(window_start < total_amount_of_contents){
+        printf("cur_win=%d, tot_win=%d\n",window_start,total_amount_of_contents);
+        if(flag) {
+            printf("sent!\n");
+            for (int i = 0; i < min(window_size, total_amount_of_contents - window_start); i++) {
+                unsigned int content_len = get_content_at(i + window_start, content, f_input, file_size);
+                unsigned int packet_len = get_packet(packet, content, 2, i + window_start, content_len);
+                sendto(socket_fd, packet, packet_len, 0, (struct sockaddr *) &receiver_addr, sizeof(struct sockaddr));
+                prt_log(get_packet_header(packet), f_log);
+            }
+            gettimeofday(&t, NULL);
+            acked = 0;
+        }
+        // recv for 500 ms
+        unsigned int byte_recved = recvfrom(socket_fd, ack_reply, BUF_SIZE-1, 0,(struct sockaddr *) &ack_reply_addr, (socklen_t *) &addr_len);
+        if(byte_recved == -1){
+            // must timeout
+            flag = 1;
+            acked= 0;
+            continue;
+        }else{
+            // if correct packet then
+            // reset timer, flag = 1, do offset
+            // else
+            // drop useless one, test timeout, if timeout then flag=1, else continue
+            flag = 0;
+            struct PacketHeader h = get_packet_header(ack_reply);prt_log(h,f_log);
+            if(h.type==3 && (h.seqNum >= window_start)) {
+                acked = max(h.seqNum - window_start, acked);
+                if ((acked >= window_size || (window_start + acked >= total_amount_of_contents))) {
+                    flag = 1;
+                    window_start += acked;
+                    acked = 0;
+                    continue;
+                }
+            }
+            struct timeval cur_t;gettimeofday(&cur_t,NULL);
+            if((cur_t.tv_sec - t.tv_sec) + (cur_t.tv_usec - t.tv_usec) / 1000000.0 >= 0.5){
+                flag = 1;
+                window_start+=acked;
+                acked=0;
+                continue;
             }
         }
-        // get time for first recv!
-        if (flag) gettimeofday(&t, NULL);
-        // may recv many useless packets!
-        unsigned int byte_recved = recvfrom(socket_fd, ack_reply, BUF_SIZE-1, 0,(struct sockaddr *) &ack_reply_addr, (socklen_t *) &addr_len);
-        // error when sent
-        // or in case where NOAck
-        if (byte_recved == -1) {
-            flag = 1;continue;
-        }
-        flag = 0;
-        struct PacketHeader h = get_packet_header(ack_reply);prt_log(h,f_log);
-        if (h.type == 3 && h.seqNum > window_start) {
-            #ifndef OPTION
-            int k = h.seqNum-window_start;
-            for(int s=k;s<=window_size-1;s++) sliding_window[s-k]=sliding_window[s];
-            for(int s=window_size-k;s<=window_size-1;s++) sliding_window[s]=NOT_SENT;
-            #else
-            flag = 1;
-            for(int s=0;s<=window_size-1;s++) sliding_window[s] = NOT_SENT;
-            #endif
-            window_start = h.seqNum;
-            gettimeofday(&t, NULL);
-            continue;
-        }
-        // recv other useless packet
-        struct timeval temp;gettimeofday(&temp, NULL);
-        if((temp.tv_sec - t.tv_sec) + (temp.tv_usec - t.tv_usec) / 1000000.0 > 0.5) flag = 1;
     }
     // udp disconnect!
     udp_disconnect(socket_fd,&receiver_addr,&ack_reply_addr,&addr_len,f_log);
+    close(socket_fd);
 }

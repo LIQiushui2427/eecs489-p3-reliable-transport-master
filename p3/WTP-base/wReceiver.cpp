@@ -30,6 +30,8 @@
 #define DATA 2
 #define ACK 3
 
+/*Referred to EECS489 p3 in github. We added our understanding and made our own implementation*/
+/*https://github.com/zianke/eecs489-p3-reliable-transport*/
 FILE* open_file(char *path,char *state){
     int len = strlen(path);
     for(int i=0;i<len;i++){
@@ -127,6 +129,7 @@ void move_window(int *array, int num_elements, int shift_by) {
 }
 
 void writeLog(struct PacketHeader h,FILE *f){
+    std::cout << h.type << " " << h.seqNum << " " << h.length << " " << h.checksum << std::endl;
     fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
 }
 
@@ -145,8 +148,10 @@ int main(int argc, char *argv[]) {
     // if not exist, create file_dir
     // if not exist, create file_dir
     if (access(file_dir, F_OK) == -1) {
+
         printf("Creating directory %s\n", file_dir);
-        mkdir(file_dir, 0700);
+        // if there are multiple levels of directories, create them
+        std::filesystem::create_directories(file_dir);
     }
 
     //initialize log file
@@ -159,7 +164,7 @@ int main(int argc, char *argv[]) {
     int addr_len = sizeof(struct sockaddr);
     int numbytes;
     char buffer[MAX_BUFFER_LEN];
-    std::memset(buffer, 0, MAX_BUFFER_LEN);
+    memset(buffer, 0, MAX_BUFFER_LEN);
 
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
         perror("socket");
@@ -170,7 +175,7 @@ int main(int argc, char *argv[]) {
     recv_addr.sin_family = AF_INET;
     recv_addr.sin_port = htons(port_num);
     recv_addr.sin_addr.s_addr = INADDR_ANY;
-    std::memset(&(recv_addr.sin_zero), '\0', 8);
+    memset(&(recv_addr.sin_zero), '\0', 8);
 
     if (bind(sockfd, reinterpret_cast<struct sockaddr *>(&recv_addr), sizeof(struct sockaddr)) == -1) {
         perror("bind");
@@ -198,12 +203,15 @@ int main(int argc, char *argv[]) {
         window_s = 0;
 
         bool completed = false;
+        printf("Waiting for packets...\n");
         while (!completed) {
             if ((numbytes = recvfrom(sockfd, buffer, MAX_BUFFER_LEN - 1, 0,
                                      (struct sockaddr *) &send_addr, (socklen_t *) &addr_len)) == -1) {
                 perror("recv");
                 exit(1);
             }
+            printf("Received packet from %s:%d\n", inet_ntoa(send_addr.sin_addr), ntohs(send_addr.sin_port));
+
 
             char *send_ip = inet_ntoa(send_addr.sin_addr);
             int send_port = ntohs(send_addr.sin_port);
@@ -247,15 +255,7 @@ int main(int argc, char *argv[]) {
                     cont = true;
                 } else {
                     seqNum = window_s;
-                    if (packet_header.seqNum > window_s) {
-                        seqNum = window_s;
-                        if (packet_header.seqNum < window_s + window_size) {
-                            if (status[packet_header.seqNum - window_s] == 0) {
-                                status[packet_header.seqNum - window_s] = 1;
-                                writeNthChunkToFile(chunk, packet_header.seqNum, chunk_len, fileptr);
-                            }
-                        }
-                    } else {
+                    if (packet_header.seqNum == seqNum) {
                         // packet_header.seqNum == window_s
                         if (status[0] == 0) {
                             status[0] = 1;
@@ -315,10 +315,10 @@ int main(int argc, char *argv[]) {
 
             writeLog(parse_packet_header(ACK_buffer),log_fileptr);
         }
-
+        printf("Completed file %s\n", output_file);
         fclose(fileptr);
     }
-
+    printf("Closing socket\n");
     close(sockfd);
     fclose(log_fileptr);
 
