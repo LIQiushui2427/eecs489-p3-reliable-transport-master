@@ -35,7 +35,29 @@
 
 /*Referred to EECS489 p3 in github. We added our understanding and made our own implementation*/
 /*https://github.com/zianke/eecs489-p3-reliable-transport*/
-FILE* open_file(char *path,char *state){
+class FileWorker 
+{
+    public:
+        int error;
+        // daclare functions
+        FileWorker();
+        ~FileWorker();
+        int getError();
+        FILE* open_file(char *path,char *state);
+        bool createDirectory(const char *path);
+        FILE* openFileForReadWrite(const char* filename);
+        
+};
+FileWorker::FileWorker(){
+    error = 0;
+};
+FileWorker::~FileWorker(){
+    error = 0;
+};
+int FileWorker::getError(){
+    return error;
+};
+FILE* FileWorker::open_file(char *path,char *state){
     assert(path != nullptr);
     assert(state != nullptr);
     int len = strlen(path);
@@ -54,7 +76,7 @@ FILE* open_file(char *path,char *state){
     }
     return f_log;
 }
-bool createDirectory(const char *path) {
+bool FileWorker::createDirectory(const char *path) {
     assert(path != nullptr);
     int windowStatusArr = mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     if (windowStatusArr == 0 || errno == EEXIST) {
@@ -65,7 +87,7 @@ bool createDirectory(const char *path) {
         return false;
     }
 }
-FILE* openFileForReadWrite(const char* filename) {
+FILE* FileWorker::openFileForReadWrite(const char* filename) {
     printf("Opening file %s\n", filename);
     FILE* fileptr = fopen(filename, "rb+");
     if (fileptr == nullptr) {
@@ -74,18 +96,44 @@ FILE* openFileForReadWrite(const char* filename) {
     }
     return fileptr;
 }
-
-struct PacketHeader generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk) {
+class WTPHandler
+{
+    public:
+        int error;
+        // daclare functions
+        WTPHandler();
+        ~WTPHandler();
+        int getError();
+        struct PacketHeader generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk);
+        void copyPacketData(char *buffer, const struct PacketHeader *header, const char *dataChunk);
+        size_t createAndFillPacket(char *buffer, unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk);
+        struct PacketHeader getHeaderFromPacket(char *buffer);
+        size_t parse_chunk(char *buffer, char *dataChunk);
+        size_t writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, FILE *outputFile);
+        void move_window(int *array, int num_elements, int step);
+        void commit_step(bool *cont, int seqNum, int window_s, int window_length, int *windowStatusArr);
+        void writeLog(struct PacketHeader h,FILE *f);
+};
+WTPHandler::WTPHandler(){
+    error = 0;
+};
+WTPHandler::~WTPHandler(){
+    error = 0;
+};
+int WTPHandler::getError(){
+    return error;
+};
+struct PacketHeader WTPHandler::generatePacketHeader(unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk) {
     return {type, seqNum, length, crc32(dataChunk, length)};
 }
 
-void copyPacketData(char *buffer, const struct PacketHeader *header, const char *dataChunk) {
+void WTPHandler::copyPacketData(char *buffer, const struct PacketHeader *header, const char *dataChunk) {
     assert(sizeof(struct PacketHeader) <= MAX_PACKET_LEN);
     size_t packet_header_len = sizeof(struct PacketHeader);
     memcpy(buffer, header, packet_header_len);
     memcpy(buffer + packet_header_len, dataChunk, header->length);
 }
-size_t createAndFillPacket(char *buffer, unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk) {
+size_t WTPHandler::createAndFillPacket(char *buffer, unsigned int type, unsigned int seqNum, unsigned int length, char *dataChunk) {
     size_t packet_header_len = sizeof(struct PacketHeader);
     assert(packet_header_len + length <= MAX_PACKET_LEN);
 
@@ -95,7 +143,7 @@ size_t createAndFillPacket(char *buffer, unsigned int type, unsigned int seqNum,
 
     return packet_header_len + length;
 }
-struct PacketHeader getHeaderFromPacket(char *buffer) {
+struct PacketHeader WTPHandler::getHeaderFromPacket(char *buffer) {
     assert(sizeof(struct PacketHeader) <= MAX_PACKET_LEN);
     assert(sizeof(struct PacketHeader) <= MAX_BUFFER_LEN);
     struct PacketHeader header;
@@ -109,7 +157,7 @@ struct PacketHeader getHeaderFromPacket(char *buffer) {
     return header;
 }
 
-size_t parse_chunk(char *buffer, char *dataChunk) {
+size_t WTPHandler::parse_chunk(char *buffer, char *dataChunk) {
     struct PacketHeader header = getHeaderFromPacket(buffer);
     size_t packet_len = header.length;
 
@@ -121,7 +169,7 @@ size_t parse_chunk(char *buffer, char *dataChunk) {
 }
 
 
-size_t writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, FILE *outputFile) {
+size_t WTPHandler::writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, FILE *outputFile) {
     size_t maxChunkSize = MAX_PACKET_LEN - sizeof(struct PacketHeader);
     long offset = maxChunkSize * chunkNumber;
 
@@ -150,7 +198,7 @@ size_t writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, F
 
 
 
-void move_window(int *array, int num_elements, int step) {
+void WTPHandler::move_window(int *array, int num_elements, int step) {
     assert(num_elements > 0);
     assert(step > 0);
     assert(step <= num_elements);
@@ -165,7 +213,7 @@ void move_window(int *array, int num_elements, int step) {
         array[i] = 0;
     }
 }
-void commit_step(bool *cont, int seqNum, int window_s, int window_length, int *windowStatusArr) {
+void WTPHandler::commit_step(bool *cont, int seqNum, int window_s, int window_length, int *windowStatusArr) {
     // if cont is false, then change it to true, the cont should be change outside the function
     if (!*cont) {
         *cont = true;
@@ -174,7 +222,7 @@ void commit_step(bool *cont, int seqNum, int window_s, int window_length, int *w
     std::cout << "seqNum: " << seqNum << std::endl;
     std::cout << "window_s: " << window_s << std::endl;
 }
-void writeLog(struct PacketHeader h,FILE *f){
+void WTPHandler::writeLog(struct PacketHeader h,FILE *f){
     std::cout << h.type << " " << h.seqNum << " " << h.length << " " << h.checksum << std::endl;
     fprintf(f, "%u %u %u %u\n", h.type,h.seqNum,h.length,h.checksum);fflush(f);
 }
@@ -194,9 +242,9 @@ int main(int argc, char *argv[]) {
         printf("Creating directory %s\n", file_dir);
         std::filesystem::create_directory(file_dir);
     }
-    
+    FileWorker fw;
     //initialize log file
-    FILE *log_fileptr = open_file(log,"a+");
+    FILE *log_fileptr = fw.open_file(log,"a+");
 
     // Init UDP receiver
     int sockfd;
@@ -207,6 +255,7 @@ int main(int argc, char *argv[]) {
     char buffer[MAX_BUFFER_LEN];
     memset(buffer, 0, MAX_BUFFER_LEN);
 
+    WTPHandler wtpHandler;
     if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
         perror("socket");
         exit(1);
@@ -254,11 +303,11 @@ int main(int argc, char *argv[]) {
             char *send_ip = inet_ntoa(send_addr.sin_addr);
             int send_port = ntohs(send_addr.sin_port);
 
-            struct PacketHeader header = getHeaderFromPacket(buffer);
-            writeLog(header,log_fileptr);
+            struct PacketHeader header = wtpHandler.getHeaderFromPacket(buffer);
+            wtpHandler.writeLog(header,log_fileptr);
 
             memset(dataChunk, 0, MAX_PACKET_LEN);
-            size_t chunk_len = parse_chunk(buffer, dataChunk);
+            size_t chunk_len = wtpHandler.parse_chunk(buffer, dataChunk);
 
             if (crc32(dataChunk, chunk_len) != header.checksum) {
                 std::cout << "Checksum incorrect\n";
@@ -271,13 +320,13 @@ int main(int argc, char *argv[]) {
                         seqNumCursor = header.seqNum;
                         seqNum = header.seqNum;
                         if (fileptr == nullptr) {
-                            fileptr = openFileForReadWrite(output_file);
+                            fileptr = fw.openFileForReadWrite(output_file);
                         }
             }
                 else if (header.type == 1) {
                     if (seqNumCursor != header.seqNum && seqNumCursor != -1) {
                         std::cout << "END seqNum incorrect\n";
-                        commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
+                        wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                     } else {
                         seqNum = header.seqNum;
                         completedFlag = true;
@@ -287,7 +336,7 @@ int main(int argc, char *argv[]) {
                 else if (header.type == 2) {
                     if (seqNumCursor == -1) {
                         std::cout << "START not received\n";
-                        commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
+                        wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                     } else {
                         if (header.seqNum < window_s) {
                             seqNum = header.seqNum;
@@ -296,19 +345,19 @@ int main(int argc, char *argv[]) {
                                 seqNum = header.seqNum;
                                 if (windowStatusArr[header.seqNum - window_s] == 0) {
                                     windowStatusArr[header.seqNum - window_s] = 1;
-                                    writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
+                                    wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
                                 }
                             } else {
                                 std::cout << "seqNum out of window\n";
                                 std::cout << "header.seqNum: " << header.seqNum << std::endl;
-                                commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
+                                wtpHandler.commit_step(&cont, seqNum, window_s, window_size, windowStatusArr);
                             }
                         } else {
                             // header.seqNum == window_s
                             seqNum = header.seqNum;
                             if (windowStatusArr[0] == 0) {
                                 windowStatusArr[0] = 1;
-                                writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
+                                wtpHandler.writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
                             }
 
                             int step = 0;
@@ -320,7 +369,7 @@ int main(int argc, char *argv[]) {
                                 }
                             }
                             window_s += step;
-                            move_window(windowStatusArr, window_size, step);
+                            wtpHandler.move_window(windowStatusArr, window_size, step);
                         }
                     }
                 } else {
@@ -351,7 +400,7 @@ int main(int argc, char *argv[]) {
             char empty_chunk[1];
             memset(empty_chunk, 0, 1);
             assert(seqNum >= 0);
-            size_t ACK_packet_len = createAndFillPacket(ACK_buffer, 3, seqNum, 0, empty_chunk);
+            size_t ACK_packet_len = wtpHandler.createAndFillPacket(ACK_buffer, 3, seqNum, 0, empty_chunk);
 
 
                 if ((numbytes = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
@@ -361,7 +410,7 @@ int main(int argc, char *argv[]) {
                 }
             std::cout << "ACK sent to " << send_ip << ":" << send_port << std::endl;
 
-            writeLog(getHeaderFromPacket(ACK_buffer),log_fileptr);
+            wtpHandler.writeLog(wtpHandler.getHeaderFromPacket(ACK_buffer),log_fileptr);
         }
 
         fclose(fileptr);
