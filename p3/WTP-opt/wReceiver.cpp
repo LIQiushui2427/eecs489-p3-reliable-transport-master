@@ -36,6 +36,8 @@
 /*Referred to EECS489 p3 in github. We added our understanding and made our own implementation*/
 /*https://github.com/zianke/eecs489-p3-reliable-transport*/
 FILE* open_file(char *path,char *state){
+    assert(path != nullptr);
+    assert(state != nullptr);
     int len = strlen(path);
     for(int i=0;i<len;i++){
         if(path[i]=='/'){
@@ -45,9 +47,15 @@ FILE* open_file(char *path,char *state){
         }
     }
     FILE *f_log=fopen(path, state);
+    if(f_log==nullptr){
+        std::cerr << "Error opening file: " << path << std::endl;
+        perror("fopen");
+        exit(1);
+    }
     return f_log;
 }
 bool createDirectory(const char *path) {
+    assert(path != nullptr);
     int windowStatusArr = mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
     if (windowStatusArr == 0 || errno == EEXIST) {
         return true;
@@ -72,6 +80,7 @@ struct PacketHeader generatePacketHeader(unsigned int type, unsigned int seqNum,
 }
 
 void copyPacketData(char *buffer, const struct PacketHeader *header, const char *dataChunk) {
+    assert(sizeof(struct PacketHeader) <= MAX_PACKET_LEN);
     size_t packet_header_len = sizeof(struct PacketHeader);
     memcpy(buffer, header, packet_header_len);
     memcpy(buffer + packet_header_len, dataChunk, header->length);
@@ -87,6 +96,8 @@ size_t createAndFillPacket(char *buffer, unsigned int type, unsigned int seqNum,
     return packet_header_len + length;
 }
 struct PacketHeader getHeaderFromPacket(char *buffer) {
+    assert(sizeof(struct PacketHeader) <= MAX_PACKET_LEN);
+    assert(sizeof(struct PacketHeader) <= MAX_BUFFER_LEN);
     struct PacketHeader header;
     char *header_ptr = (char *)&header;
     size_t header_size = sizeof(struct PacketHeader);
@@ -139,18 +150,18 @@ size_t writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t chunkSize, F
 
 
 
-void move_window(int *array, int num_elements, int shift_by) {
+void move_window(int *array, int num_elements, int step) {
     assert(num_elements > 0);
-    assert(shift_by > 0);
-    assert(shift_by <= num_elements);
+    assert(step > 0);
+    assert(step <= num_elements);
 
     // Manual shift using loops
-    for (int i = 0; i < num_elements - shift_by; ++i) {
-        array[i] = array[i + shift_by];
+    for (int i = 0; i < num_elements - step; ++i) {
+        array[i] = array[i + step];
     }
 
     // Set the remaining elements to 0
-    for (int i = num_elements - shift_by; i < num_elements; ++i) {
+    for (int i = num_elements - step; i < num_elements; ++i) {
         array[i] = 0;
     }
 }
@@ -198,8 +209,7 @@ int main(int argc, char *argv[]) {
     recv_addr.sin_addr.s_addr = INADDR_ANY;
     memset(&(recv_addr.sin_zero), '\0', 8);
 
-    if (bind(sockfd, (struct sockaddr *) &recv_addr,
-             sizeof(struct sockaddr)) == -1) {
+    if (bind(sockfd, (struct sockaddr *) &recv_addr, sizeof(struct sockaddr)) == -1) {
         std::cerr << "Error binding to port " << port_num << std::endl;
         exit(1);
     }
@@ -224,11 +234,11 @@ int main(int argc, char *argv[]) {
         }
         window_s = 0;
 
-        bool completed = false;
-        while (!completed) {
+        bool completedFlag = false;
+        while (!completedFlag) {
             if ((numbytes = recvfrom(sockfd, buffer, MAX_BUFFER_LEN - 1, 0,
                                      (struct sockaddr *) &send_addr, (socklen_t *) &addr_len)) == -1) {
-                perror("recv");
+                std::cerr << "Error receiving packet" << std::endl;
                 exit(1);
             }
 
@@ -242,7 +252,7 @@ int main(int argc, char *argv[]) {
             size_t chunk_len = parse_chunk(buffer, dataChunk);
 
             if (crc32(dataChunk, chunk_len) != header.checksum) {
-                printf("Checksum incorrect\n");
+                std::cout << "Checksum incorrect\n";
                 continue;
             }
 
@@ -257,17 +267,17 @@ int main(int argc, char *argv[]) {
             }
                 else if (header.type == 1) {
                     if (seqNumCursor != header.seqNum && seqNumCursor != -1) {
-                        printf("END seqNum not same as START\n");
+                        std::cout << "END seqNum incorrect\n";
                         should_continue = true;
                     } else {
                         seqNum = header.seqNum;
-                        completed = true;
+                        completedFlag = true;
                         seqNumCursor = -1;
                     }
                 }
                 else if (header.type == 2) {
                     if (seqNumCursor == -1) {
-                        printf("No START received\n");
+                        std::cout << "START not received\n";
                         should_continue = true;
                     } else {
                         if (header.seqNum < window_s) {
@@ -290,16 +300,16 @@ int main(int argc, char *argv[]) {
                                 writeNthChunkToFile(dataChunk, header.seqNum, chunk_len, fileptr);
                             }
 
-                            int shift_by = 0;
+                            int step = 0;
                             for (int i = 0; i < window_size; i++) {
                                 if (windowStatusArr[i] == 1) {
-                                    shift_by++;
+                                    step++;
                                 } else {
                                     break;
                                 }
                             }
-                            window_s += shift_by;
-                            move_window(windowStatusArr, window_size, shift_by);
+                            window_s += step;
+                            move_window(windowStatusArr, window_size, step);
                         }
                     }
                 } else {
@@ -335,17 +345,17 @@ int main(int argc, char *argv[]) {
 
                 if ((numbytes = sendto(sockfd, ACK_buffer, ACK_packet_len, 0,
                                        (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
-                    perror("sendto");
+                    std::cerr << "Error sending ACK packet to " << send_ip << ":" << send_port << std::endl;
                     exit(1);
                 }
-
+            std::cout << "ACK sent to " << send_ip << ":" << send_port << std::endl;
 
             writeLog(getHeaderFromPacket(ACK_buffer),log_fileptr);
         }
 
         fclose(fileptr);
     }
-
+    std::cout << "File transfer completedFlag" << std::endl;
     close(sockfd);
     fclose(log_fileptr);
 
