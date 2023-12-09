@@ -7,9 +7,9 @@
       "request": "launch",
       "args": [],
       "stopAtEntry": false,
-      "externalConsole": true,
-      "cwd": "c:/Users/yijia/Downloads/eecs489-p3-reliable-transport-master",
-      "program": "c:/Users/yijia/Downloads/eecs489-p3-reliable-transport-master/build/Debug/outDebug",
+      "externalConsole": false,
+      "cwd": "/Users/user/Downloads/eecs489-p3-reliable-transport-master",
+      "program": "/Users/user/Downloads/eecs489-p3-reliable-transport-master/build/Debug/outDebug",
       "MIMode": "lldb",
       "miDebuggerPath": "lldb",
       "setupCommands": [

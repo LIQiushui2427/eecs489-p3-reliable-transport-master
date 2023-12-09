@@ -138,6 +138,7 @@ void WTPHandler::copyPacketData(char *tmpBuffer, const struct PacketHeader *head
     memcpy(tmpBuffer + packet_header_len, datapiece, header->length);
 }
 size_t WTPHandler::createAndFillPacket(char *tmpBuffer, unsigned int type, unsigned int seqNum, unsigned int length, char *datapiece) {
+    assert(datapiece != nullptr);
     size_t packet_header_len = sizeof(struct PacketHeader);
     assert(packet_header_len + length <= MAX_PACKET_LEN);
 
@@ -200,11 +201,6 @@ size_t WTPHandler::writeNthChunkToFile(char *dataChunk, int chunkNumber, size_t 
 
 
 void WTPHandler::move_window(int *array, int num_elements, int step) {
-    assert(num_elements > 0);
-    assert(step > 0);
-    assert(step <= num_elements);
-
-
     memmove(&array[0], &array[step], (num_elements - step) * sizeof(int));
 
     if (num_elements - step > 0) {
@@ -276,12 +272,7 @@ int main(int argc, char *argv[]) {
     recv_address.sin_addr.s_addr = INADDR_ANY;
     memset(&(recv_address.sin_zero), '\0', 8);
 
-    if (bind(socketfd, reinterpret_cast<struct sockaddr *>(&recv_address), sizeof(struct sockaddr)) == -1) {
-        perror("bind");
-        std::fclose(log_fileptr);
-        close(socketfd);
-        return 1;
-    }
+    bind(socketfd, reinterpret_cast<struct sockaddr *>(&recv_address), sizeof(struct sockaddr));
 
     int file_num = 0;
     int window_s = 0;
@@ -299,23 +290,20 @@ int main(int argc, char *argv[]) {
         memset(windowStatusArr, 0, window_length * sizeof(int));
         window_s = 0;
 
-        bool completedFlag = false;
+        bool completed = false;
         std::cout << "Waiting for packets...\n";
-        while (!completedFlag) {
+        while (!completed) {
+            std::cout << "Waiting for packets...\n";
+            assert(window_s >= 0);
             if ((counter = recvfrom(socketfd, tmpBuffer, MAX_BUFFER_LEN - 1, 0,
                                      (struct sockaddr *) &send_address, (socklen_t *) &addr_len)) == -1) {
                 std::cerr << "Error receiving packet\n";
                 exit(1);
             }
             printf("Received packet from %s:%d\n", inet_ntoa(send_address.sin_addr), ntohs(send_address.sin_port));
-            std::cout << "Packet length: " << counter << std::endl;
-            std::cout << "Packet content: " << tmpBuffer << std::endl;
-            std::cout << "Packet content (hex): ";
-            for (int i = 0; i < counter; i++) {
-                printf("%02x ", tmpBuffer[i]);
-            }
 
-            char *sender_location_ip = inet_ntoa(send_address.sin_addr);
+
+            char *send_ip = inet_ntoa(send_address.sin_addr);
             int send_port = ntohs(send_address.sin_port);
 
             struct PacketHeader header = wtpHandler.parse_packet_header(tmpBuffer);
@@ -346,7 +334,7 @@ int main(int argc, char *argv[]) {
                     wtpHandler.commit_step(&cont, seqNum, window_s, window_length, windowStatusArr);
                 } else {
                     seqNum = header.seqNum;
-                    completedFlag = true;
+                    completed = true;
                     rand_num = -1;
                 }
             } else if (header.type == DATA) {
@@ -364,10 +352,16 @@ int main(int argc, char *argv[]) {
                         }
 
                         int step = 0;
+                        assert(window_length > 0);
                         for (int i = 0; i < window_length; i++) {
-                            if (windowStatusArr[i] == 1) {step++;} else {break;}
+                            if (windowStatusArr[i] == 1) {
+                                step++;
+                                std::cout << "step: " << step << std::endl;
+                                } else {
+                                    break;
+                                }
                         }
-                        window_s += step;
+                        window_s = window_s + step;
                         seqNum = window_s;
                         wtpHandler.move_window(windowStatusArr, window_length, step);
                     }
@@ -381,18 +375,18 @@ int main(int argc, char *argv[]) {
             }
 
             // Init ACK sender
-            struct sockaddr_in ACK_address;
+            struct sockaddr_in ACK_addr;
             struct hostent *otherHost;
 
-            if ((otherHost = gethostbyname(sender_location_ip)) == NULL) {
-                perror("gethostbyname");
-                exit(1);
-            }
+            otherHost = gethostbyname(send_ip);
+            assert(otherHost != nullptr);
 
-            ACK_address.sin_family = AF_INET;
-            ACK_address.sin_port = htons(send_port);
-            ACK_address.sin_addr = *((struct in_addr *) otherHost->h_addr);
-            memset(&(ACK_address.sin_zero), '\0', 8);
+            ACK_addr.sin_family = AF_INET;
+            ACK_addr.sin_port = htons(send_port);
+            assert(otherHost->h_addrtype == AF_INET);
+            ACK_addr.sin_addr = *((struct in_addr *) otherHost->h_addr);
+            memset(&(ACK_addr.sin_zero), '\0', 8);
+            std::cout << "Sending ACK packet\n";
 
             char ACK_buffer[MAX_BUFFER_LEN];
             memset(ACK_buffer, 0, MAX_BUFFER_LEN);
@@ -402,9 +396,11 @@ int main(int argc, char *argv[]) {
 
             assert(seqNum >= 0);
             size_t ACK_packet_len = wtpHandler.createAndFillPacket(ACK_buffer, 3, seqNum, 0, empty_chunk);
+            assert(ACK_packet_len <= MAX_PACKET_LEN);
+            assert(ACK_packet_len > 0);
 
             if ((counter = sendto(socketfd, ACK_buffer, ACK_packet_len, 0,
-                                   (struct sockaddr *) &ACK_address, sizeof(struct sockaddr))) == -1) {
+                                   (struct sockaddr *) &ACK_addr, sizeof(struct sockaddr))) == -1) {
                 std::cerr << "Error sending ACK packet\n";
                 exit(1);
             }
@@ -413,7 +409,7 @@ int main(int argc, char *argv[]) {
         }
         std::cout << "File transfer complete\n";
         fclose(fileptr);
-        if (completedFlag) {
+        if (completed) {
             std::cout << "File saved to " << output_file << std::endl;
             std::cout << "File size: " << filesize(output_file) << std::endl;
         }
